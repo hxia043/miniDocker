@@ -16,7 +16,7 @@ import (
 func exitContainer() error {
 	if err := syscall.Unmount("/proc", 0); err != nil {
 		log.Error(err)
-		return er
+		return err
 	}
 
 	return nil
