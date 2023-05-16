@@ -1,7 +1,8 @@
 package container
 
 import (
-	utils "docker/internal/utils/pipe"
+	"docker/internal/runc/image"
+	"docker/internal/utils/pipe"
 	"fmt"
 	"io"
 	"os"
@@ -13,8 +14,16 @@ import (
 	log "github.com/Sirupsen/logrus"
 )
 
+const (
+	imagedir = "/root/go/src/miniDocker/docker/cmd/docker-nwmgmt.tar"
+	lowerdir = "/root/go/src/miniDocker/docker/cmd/docker-nwmgmt"
+	Upperdir = "/root/go/src/miniDocker/docker/cmd/diff"
+	Workdir  = "/root/go/src/miniDocker/docker/cmd/work"
+	Mergedir = "/root/go/src/miniDocker/docker/cmd/merged"
+)
+
 func NewParentProcess(tty bool) (*exec.Cmd, *os.File) {
-	readPipe, writePipe, err := utils.NewPipe()
+	readPipe, writePipe, err := pipe.NewPipe()
 	if err != nil {
 		log.Errorf("new pipe failed: %v", err)
 		return nil, nil
@@ -32,6 +41,10 @@ func NewParentProcess(tty bool) (*exec.Cmd, *os.File) {
 	}
 
 	cmd.ExtraFiles = []*os.File{readPipe}
+
+	image.NewOverlayFilesystem(imagedir, lowerdir, Upperdir, Workdir, Mergedir)
+	cmd.Dir = Mergedir
+
 	return cmd, writePipe
 }
 

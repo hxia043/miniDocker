@@ -14,6 +14,23 @@ import (
 )
 
 func exitContainer() error {
+	if err := syscall.Unmount(container.Mergedir, 0); err != nil {
+		log.Error(err)
+		return err
+	}
+
+	if err := os.RemoveAll(container.Mergedir); err != nil {
+		log.Errorf("remove merge layer dir %v failed: %v", container.Mergedir, err)
+	}
+
+	if err := os.RemoveAll(container.Workdir); err != nil {
+		log.Errorf("remove work layer dir %v failed: %v", container.Upperdir, err)
+	}
+
+	if err := os.RemoveAll(container.Upperdir); err != nil {
+		log.Errorf("remove upper layer dir %v failed: %v", container.Upperdir, err)
+	}
+
 	if err := syscall.Unmount("/proc", 0); err != nil {
 		log.Error(err)
 		return err
