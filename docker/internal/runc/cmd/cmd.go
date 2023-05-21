@@ -13,7 +13,17 @@ import (
 	"github.com/urfave/cli"
 )
 
-func exitContainer() error {
+func exitContainer(volume string) error {
+	dirs := strings.Split(volume, ":")
+	if len(dirs) == 2 {
+		volumeContainerDir := dirs[1]
+		volumeContainerMountPoint := container.Mergedir + volumeContainerDir
+		if err := syscall.Unmount(volumeContainerMountPoint, 0); err != nil {
+			log.Error(err)
+			return err
+		}
+	}
+
 	if err := syscall.Unmount(container.Mergedir, 0); err != nil {
 		log.Error(err)
 		return err
@@ -39,11 +49,11 @@ func exitContainer() error {
 	return nil
 }
 
-func Run(tty bool, commands []string, res *subsystem.ResourceConfig) {
+func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume string) {
 	// @ToDo: need handle kill signal
-	defer exitContainer()
+	defer exitContainer(volume)
 
-	parent, writePipe := container.NewParentProcess(tty)
+	parent, writePipe := container.NewParentProcess(tty, volume)
 	if err := parent.Start(); err != nil {
 		log.Error(err)
 	}
@@ -78,6 +88,10 @@ var RunCommand = cli.Command{
 			Name:  "cpuset",
 			Usage: "cpuset limit",
 		},
+		cli.StringFlag{
+			Name:  "v",
+			Usage: "volume",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) < 1 {
@@ -95,8 +109,9 @@ var RunCommand = cli.Command{
 			CpuShare:    context.String("cpushare"),
 		}
 
+		volume := context.String("v")
 		tty := context.Bool("it")
-		Run(tty, cmds, rc)
+		Run(tty, cmds, rc, volume)
 		return nil
 	},
 }

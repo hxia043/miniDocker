@@ -22,7 +22,7 @@ const (
 	Mergedir = "/root/go/src/miniDocker/docker/cmd/merged"
 )
 
-func NewParentProcess(tty bool) (*exec.Cmd, *os.File) {
+func NewParentProcess(tty bool, volume string) (*exec.Cmd, *os.File) {
 	readPipe, writePipe, err := pipe.NewPipe()
 	if err != nil {
 		log.Errorf("new pipe failed: %v", err)
@@ -42,9 +42,13 @@ func NewParentProcess(tty bool) (*exec.Cmd, *os.File) {
 
 	cmd.ExtraFiles = []*os.File{readPipe}
 
-	image.NewOverlayFilesystem(imagedir, lowerdir, Upperdir, Workdir, Mergedir)
-	cmd.Dir = Mergedir
+	if volume != "" && len(strings.Split(volume, ":")) == 2 {
+		image.NewOverlayFilesystemWithVolume(imagedir, lowerdir, Upperdir, Workdir, Mergedir, volume)
+	} else {
+		image.NewOverlayFilesystem(imagedir, lowerdir, Upperdir, Workdir, Mergedir)
+	}
 
+	cmd.Dir = Mergedir
 	return cmd, writePipe
 }
 
