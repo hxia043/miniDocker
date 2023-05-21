@@ -116,6 +116,20 @@ var RunCommand = cli.Command{
 	},
 }
 
+var CommitCommand = cli.Command{
+	Name:  "commit",
+	Usage: "commit container to image with tar",
+	Action: func(context *cli.Context) error {
+		if len(context.Args()) != 1 {
+			log.Errorf("wrong args for commit")
+		}
+
+		log.Infof("commit container into tar image")
+		imageName := context.Args().Get(0)
+		return container.RunContainerCommit(imageName)
+	},
+}
+
 var InitCommand = cli.Command{
 	Name:  "init",
 	Usage: `init container process`,

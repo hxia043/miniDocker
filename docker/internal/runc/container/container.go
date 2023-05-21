@@ -114,6 +114,15 @@ func readUserCommands() []string {
 	return strings.Split(string(msg), " ")
 }
 
+func RunContainerCommit(imageName string) error {
+	imageTar := imageName + ".tar"
+	if _, err := exec.Command("tar", "-czf", imageTar, "-C", Mergedir, ".").CombinedOutput(); err != nil {
+		log.Errorf("commit container into %v failed: %v", imageTar, err)
+	}
+
+	return nil
+}
+
 func RunContainerInitProcess() error {
 	commands := readUserCommands()
 	if len(commands) == 0 {
