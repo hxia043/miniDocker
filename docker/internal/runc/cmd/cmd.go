@@ -13,7 +13,11 @@ import (
 	"github.com/urfave/cli"
 )
 
-func exitContainer(volume string) error {
+func exitContainer(tty bool, volume string) error {
+	if !tty {
+		return nil
+	}
+
 	dirs := strings.Split(volume, ":")
 	if len(dirs) == 2 {
 		volumeContainerDir := dirs[1]
@@ -50,8 +54,7 @@ func exitContainer(volume string) error {
 }
 
 func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume string) {
-	// @ToDo: need handle kill signal
-	defer exitContainer(volume)
+	defer exitContainer(tty, volume)
 
 	parent, writePipe := container.NewParentProcess(tty, volume)
 	if err := parent.Start(); err != nil {
@@ -64,7 +67,9 @@ func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume stri
 	cgroupManager.Apply(parent.Process.Pid)
 
 	sendInitCommand(commands, writePipe)
-	parent.Wait()
+	if tty {
+		parent.Wait()
+	}
 }
 
 var RunCommand = cli.Command{
@@ -75,6 +80,10 @@ var RunCommand = cli.Command{
 		cli.BoolFlag{
 			Name:  "it",
 			Usage: "enable tty",
+		},
+		cli.BoolFlag{
+			Name:  "d",
+			Usage: "detach",
 		},
 		cli.StringFlag{
 			Name:  "m",
@@ -110,7 +119,13 @@ var RunCommand = cli.Command{
 		}
 
 		volume := context.String("v")
+
 		tty := context.Bool("it")
+		detach := context.Bool("d")
+		if tty && detach {
+			return fmt.Errorf("it and d flag can not be provided both")
+		}
+
 		Run(tty, cmds, rc, volume)
 		return nil
 	},
