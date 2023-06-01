@@ -4,8 +4,10 @@ import (
 	"docker/internal/runc/cgroups"
 	"docker/internal/runc/cgroups/subsystem"
 	"docker/internal/runc/container"
+	"docker/internal/utils/id"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -53,12 +55,21 @@ func exitContainer(tty bool, volume string) error {
 	return nil
 }
 
-func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume string) {
+func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string) {
 	defer exitContainer(tty, volume)
 
-	parent, writePipe := container.NewParentProcess(tty, volume)
+	if name == "" {
+		name = id.GenerateContainerId()
+	}
+
+	parent, writePipe := container.NewParentProcess(tty, volume, name)
 	if err := parent.Start(); err != nil {
 		log.Error(err)
+	}
+
+	c := container.New(name, strconv.Itoa(parent.Process.Pid), strings.Join(commands, " "), container.RUNNING)
+	if err := c.RecordContainerInfo(); err != nil {
+		log.Error("record container info failed")
 	}
 
 	cgroupManager := cgroups.New("minidocker-cgroup")
@@ -69,6 +80,7 @@ func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume stri
 	sendInitCommand(commands, writePipe)
 	if tty {
 		parent.Wait()
+		c.UpdateContainerInfo(container.EXIT)
 	}
 }
 
@@ -101,6 +113,10 @@ var RunCommand = cli.Command{
 			Name:  "v",
 			Usage: "volume",
 		},
+		cli.StringFlag{
+			Name:  "name",
+			Usage: "container name",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) < 1 {
@@ -126,7 +142,9 @@ var RunCommand = cli.Command{
 			return fmt.Errorf("it and d flag can not be provided both")
 		}
 
-		Run(tty, cmds, rc, volume)
+		name := context.String("name")
+
+		Run(tty, cmds, rc, volume, name)
 		return nil
 	},
 }
@@ -145,6 +163,41 @@ var CommitCommand = cli.Command{
 	},
 }
 
+var LogCommand = cli.Command{
+	Name:  "log",
+	Usage: "container log",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name:  "name",
+			Usage: "container name",
+		},
+	},
+	Action: func(context *cli.Context) error {
+		log.Infof("collect container log")
+		name := context.String("name")
+		return container.RunContainerLog(name)
+	},
+}
+
+var ListCommand = cli.Command{
+	Name:  "ps",
+	Usage: "list container",
+	Flags: []cli.Flag{
+		cli.BoolFlag{
+			Name:  "a",
+			Usage: "list all container",
+		},
+	},
+	Action: func(context *cli.Context) error {
+		if len(context.Args()) != 0 {
+			log.Errorf("wrong args for ps")
+		}
+
+		log.Infof("list container")
+		return container.RunContainerList(context.Bool("a"))
+	},
+}
+
 var InitCommand = cli.Command{
 	Name:  "init",
 	Usage: `init container process`,
@@ -156,7 +209,7 @@ var InitCommand = cli.Command{
 
 func sendInitCommand(commands []string, writePipe *os.File) {
 	command := strings.Join(commands, " ")
-	log.Infof("send command: ", command)
+	log.Info("send command: ", command)
 
 	writePipe.WriteString(command)
 	writePipe.Close()

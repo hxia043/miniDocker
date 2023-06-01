@@ -1,17 +1,24 @@
 package container
 
 import (
+	"bufio"
 	"docker/internal/runc/image"
+	"docker/internal/utils/cmdtable"
+	"docker/internal/utils/path"
 	"docker/internal/utils/pipe"
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/gosuri/uitable"
 )
 
 const (
@@ -20,9 +27,26 @@ const (
 	Upperdir = "/root/go/src/miniDocker/docker/cmd/diff"
 	Workdir  = "/root/go/src/miniDocker/docker/cmd/work"
 	Mergedir = "/root/go/src/miniDocker/docker/cmd/merged"
+
+	RUNNING = "running"
+	STOP    = "stop"
+	EXIT    = "exit"
+
+	defaultContainerInfoPath = "/var/run/minidocker"
+	configName               = "config.json"
+	logName                  = "container.log"
 )
 
-func NewParentProcess(tty bool, volume string) (*exec.Cmd, *os.File) {
+type Container struct {
+	Pid         string `json:"pid"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Command     string `json:"command"`
+	CreatedTime string `json:"created"`
+	config      string
+}
+
+func NewParentProcess(tty bool, volume, name string) (*exec.Cmd, *os.File) {
 	readPipe, writePipe, err := pipe.NewPipe()
 	if err != nil {
 		log.Errorf("new pipe failed: %v", err)
@@ -35,9 +59,25 @@ func NewParentProcess(tty bool, volume string) (*exec.Cmd, *os.File) {
 	}
 
 	if tty {
+		// containerlog := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, logName)
+		// file, _ := os.OpenFile(containerlog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
+		// defer func() { file.Close() }()
+
 		cmd.Stdin = os.Stdin
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
+
+		// multiWriter := io.MultiWriter(os.Stdout, file)
+		// log.SetOutput(multiWriter)
+		// log.Info("test output")
+	} else {
+		containerlog := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, logName)
+		file, _ := os.OpenFile(containerlog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
+		defer func() { file.Close() }()
+
+		cmd.Stdin = os.Stdin
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = file
 	}
 
 	cmd.ExtraFiles = []*os.File{readPipe}
@@ -114,6 +154,28 @@ func readUserCommands() []string {
 	return strings.Split(string(msg), " ")
 }
 
+func RunContainerLog(name string) error {
+	containerlog := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, logName)
+	exist, err := path.PathExist(containerlog)
+	if err != nil {
+		return err
+	}
+	if !exist {
+		return fmt.Errorf("container log doesn't exist in %v", containerlog)
+	}
+
+	content, err := os.ReadFile(containerlog)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.WriteString(os.Stdout, string(content)); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func RunContainerCommit(imageName string) error {
 	imageTar := imageName + ".tar"
 	if _, err := exec.Command("tar", "-czf", imageTar, "-C", Mergedir, ".").CombinedOutput(); err != nil {
@@ -121,6 +183,56 @@ func RunContainerCommit(imageName string) error {
 	}
 
 	return nil
+}
+
+func getContainerInfo(file os.FileInfo) (*Container, error) {
+	name := file.Name()
+	config := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, configName)
+	content, err := os.ReadFile(config)
+	if err != nil {
+		return nil, err
+	}
+
+	var container Container
+	if err := json.Unmarshal(content, &container); err != nil {
+		log.Errorf("json Unmarshal failed: %v", err)
+		return nil, err
+	}
+
+	return &container, nil
+}
+
+func RunContainerList(flag bool) error {
+	files, err := ioutil.ReadDir(defaultContainerInfoPath)
+	if err != nil {
+		log.Errorf("read container config failed: %v", err)
+		return err
+	}
+
+	var containers []*Container
+	for _, file := range files {
+		c, err := getContainerInfo(file)
+		if err != nil {
+			log.Errorf("get container info failed: %v", err)
+			continue
+		}
+
+		if flag {
+			containers = append(containers, c)
+		} else {
+			if c.Status == RUNNING {
+				containers = append(containers, c)
+			}
+		}
+	}
+
+	table := uitable.New()
+	table.AddRow("NAME", "COMMAND", "CREATED", "STATUS", "PID")
+	for _, container := range containers {
+		table.AddRow(container.Name, container.Command, container.CreatedTime, container.Status, container.Pid)
+	}
+
+	return cmdtable.EncodeTable(os.Stdout, table)
 }
 
 func RunContainerInitProcess() error {
@@ -141,4 +253,63 @@ func RunContainerInitProcess() error {
 	}
 
 	return nil
+}
+func (c *Container) UpdateContainerInfo(status string) {
+	file, err := os.OpenFile(c.config, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0622)
+	if err != nil {
+		log.Errorf("open container config failed: %v", err)
+	}
+
+	if status != RUNNING {
+		c.Status = status
+	}
+
+	newContainerInfo, _ := json.MarshalIndent(c, "", "    ")
+	w := bufio.NewWriter(file)
+	w.WriteString(string(newContainerInfo))
+	w.Flush()
+}
+
+func (c *Container) RecordContainerInfo() error {
+	containerInfo, err := json.MarshalIndent(c, "", "    ")
+	if err != nil {
+		log.Errorf("record container info failed: %v", err)
+		return err
+	}
+
+	containerInfoPath := fmt.Sprintf("%s/%s", defaultContainerInfoPath, c.Name)
+	if err := os.MkdirAll(containerInfoPath, 0622); err != nil {
+		log.Errorf("create container path failed: %v", err)
+		return err
+	}
+
+	c.config = fmt.Sprintf("%s/%s", containerInfoPath, configName)
+	file, err := os.Create(c.config)
+	defer func() {
+		if err := file.Close(); err != nil {
+			return
+		}
+	}()
+
+	if err != nil {
+		log.Errorf("create container path failed: %v", err)
+		return err
+	}
+
+	if _, err := file.WriteString(string(containerInfo)); err != nil {
+		log.Errorf("write container config failed: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func New(name, pid, command, status string) *Container {
+	return &Container{
+		Name:        name,
+		Pid:         pid,
+		Command:     command,
+		Status:      status,
+		CreatedTime: time.Now().Format(time.RFC3339),
+	}
 }

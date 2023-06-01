@@ -16,7 +16,7 @@ func main() {
 	app.Name = "minidocker"
 	app.Usage = usage
 
-	app.Commands = []cli.Command{cmd.InitCommand, cmd.RunCommand, cmd.CommitCommand}
+	app.Commands = []cli.Command{cmd.InitCommand, cmd.RunCommand, cmd.CommitCommand, cmd.ListCommand, cmd.LogCommand}
 
 	app.Before = func(ctx *cli.Context) error {
 		log.SetFormatter(&log.JSONFormatter{})
