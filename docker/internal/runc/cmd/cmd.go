@@ -163,6 +163,26 @@ var CommitCommand = cli.Command{
 	},
 }
 
+var StopCommand = cli.Command{
+	Name:  "stop",
+	Usage: "stop container",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name:  "name",
+			Usage: "container name",
+		},
+	},
+	Action: func(context *cli.Context) error {
+		if len(context.Args()) != 0 {
+			log.Errorf("wrong args for stop container")
+		}
+
+		log.Infof("stop container")
+		name := context.String("name")
+		return container.RunContainerStop(name)
+	},
+}
+
 var LogCommand = cli.Command{
 	Name:  "log",
 	Usage: "container log",

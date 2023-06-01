@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -172,6 +173,31 @@ func RunContainerLog(name string) error {
 	if _, err := io.WriteString(os.Stdout, string(content)); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func RunContainerStop(name string) error {
+	config := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, configName)
+	content, _ := os.ReadFile(config)
+	var container Container
+	if err := json.Unmarshal(content, &container); err != nil {
+		log.Errorf("json Unmarshal failed: %v", err)
+		return err
+	}
+
+	pid, _ := strconv.Atoi(container.Pid)
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return err
+	}
+
+	container.Status = STOP
+	file, _ := os.OpenFile(config, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0622)
+
+	newContainerInfo, _ := json.MarshalIndent(container, "", "    ")
+	w := bufio.NewWriter(file)
+	w.WriteString(string(newContainerInfo))
+	w.Flush()
 
 	return nil
 }
