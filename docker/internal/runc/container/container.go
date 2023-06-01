@@ -177,6 +177,26 @@ func RunContainerLog(name string) error {
 	return nil
 }
 
+func RunContainerRemove(name string) error {
+	config := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, configName)
+	content, _ := os.ReadFile(config)
+	var container Container
+	json.Unmarshal(content, &container)
+
+	if container.Status == RUNNING {
+		if err := RunContainerStop(name); err != nil {
+			return err
+		}
+	}
+
+	containerpath := fmt.Sprintf("%s/%s", defaultContainerInfoPath, name)
+	if err := os.RemoveAll(containerpath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func RunContainerStop(name string) error {
 	config := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, configName)
 	content, _ := os.ReadFile(config)
@@ -280,6 +300,7 @@ func RunContainerInitProcess() error {
 
 	return nil
 }
+
 func (c *Container) UpdateContainerInfo(status string) {
 	file, err := os.OpenFile(c.config, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0622)
 	if err != nil {

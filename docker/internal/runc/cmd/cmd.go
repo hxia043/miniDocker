@@ -183,6 +183,26 @@ var StopCommand = cli.Command{
 	},
 }
 
+var RemoveCommand = cli.Command{
+	Name:  "remove",
+	Usage: "remove container",
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name:  "name",
+			Usage: "container name",
+		},
+	},
+	Action: func(context *cli.Context) error {
+		if len(context.Args()) != 0 {
+			log.Errorf("wrong args for remove container")
+		}
+
+		log.Infof("remove container")
+		name := context.String("name")
+		return container.RunContainerRemove(name)
+	},
+}
+
 var LogCommand = cli.Command{
 	Name:  "log",
 	Usage: "container log",
