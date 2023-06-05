@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 
+	_ "docker/internal/runc/nsenter"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/urfave/cli"
 )
@@ -235,6 +237,27 @@ var ListCommand = cli.Command{
 
 		log.Infof("list container")
 		return container.RunContainerList(context.Bool("a"))
+	},
+}
+
+var ExecCommand = cli.Command{
+	Name:  "exec",
+	Usage: "enter the contianer",
+	Action: func(context *cli.Context) error {
+		if pid := os.Getenv(container.ENV_EXEC_PID); pid != "" {
+			log.Info("callback to pid: ", pid)
+			return nil
+		}
+
+		if len(context.Args()) != 2 {
+			return fmt.Errorf("missing container name or command")
+		}
+
+		containerName := context.Args().Get(0)
+		var commands []string
+		commands = append(commands, context.Args().Tail()...)
+
+		return container.RunContainerExec(containerName, commands)
 	},
 }
 

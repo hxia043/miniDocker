@@ -36,6 +36,9 @@ const (
 	defaultContainerInfoPath = "/var/run/minidocker"
 	configName               = "config.json"
 	logName                  = "container.log"
+
+	ENV_EXEC_PID = "minidocker_pid"
+	ENV_EXEC_CMD = "minidocker_cmd"
 )
 
 type Container struct {
@@ -279,6 +282,43 @@ func RunContainerList(flag bool) error {
 	}
 
 	return cmdtable.EncodeTable(os.Stdout, table)
+}
+
+func getContainerPid(name string) (string, error) {
+	config := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, configName)
+	content, _ := os.ReadFile(config)
+
+	var container Container
+	if err := json.Unmarshal(content, &container); err != nil {
+		return "", fmt.Errorf("json Unmarshal failed: %v", err)
+	}
+
+	return container.Pid, nil
+}
+
+func RunContainerExec(containerName string, commands []string) error {
+	pid, err := getContainerPid(containerName)
+	if err != nil {
+		return fmt.Errorf("get container pid failed: %v", err)
+	}
+
+	log.Infof("minidocker pid: %v", pid)
+	log.Infof("minidocker command: %v", strings.Join(commands, " "))
+
+	os.Setenv(ENV_EXEC_PID, pid)
+	os.Setenv(ENV_EXEC_CMD, strings.Join(commands, " "))
+
+	cmd := exec.Command("/proc/self/exe", "exec")
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run exec failed: %v", err)
+	}
+
+	return nil
 }
 
 func RunContainerInitProcess() error {
