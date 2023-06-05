@@ -57,14 +57,14 @@ func exitContainer(tty bool, volume string) error {
 	return nil
 }
 
-func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string) {
+func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string, envs []string) {
 	defer exitContainer(tty, volume)
 
 	if name == "" {
 		name = id.GenerateContainerId()
 	}
 
-	parent, writePipe := container.NewParentProcess(tty, volume, name)
+	parent, writePipe := container.NewParentProcess(tty, volume, name, envs)
 	if err := parent.Start(); err != nil {
 		log.Error(err)
 	}
@@ -119,6 +119,10 @@ var RunCommand = cli.Command{
 			Name:  "name",
 			Usage: "container name",
 		},
+		cli.StringSliceFlag{
+			Name:  "e",
+			Usage: "set env",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) < 1 {
@@ -145,8 +149,8 @@ var RunCommand = cli.Command{
 		}
 
 		name := context.String("name")
-
-		Run(tty, cmds, rc, volume, name)
+		envs := context.StringSlice("e")
+		Run(tty, cmds, rc, volume, name, envs)
 		return nil
 	},
 }

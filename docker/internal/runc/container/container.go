@@ -50,7 +50,7 @@ type Container struct {
 	config      string
 }
 
-func NewParentProcess(tty bool, volume, name string) (*exec.Cmd, *os.File) {
+func NewParentProcess(tty bool, volume, name string, envs []string) (*exec.Cmd, *os.File) {
 	readPipe, writePipe, err := pipe.NewPipe()
 	if err != nil {
 		log.Errorf("new pipe failed: %v", err)
@@ -86,6 +86,7 @@ func NewParentProcess(tty bool, volume, name string) (*exec.Cmd, *os.File) {
 
 	cmd.ExtraFiles = []*os.File{readPipe}
 
+	cmd.Env = append(os.Environ(), envs...)
 	if volume != "" && len(strings.Split(volume, ":")) == 2 {
 		image.NewOverlayFilesystemWithVolume(imagedir, lowerdir, Upperdir, Workdir, Mergedir, volume)
 	} else {
@@ -313,6 +314,13 @@ func RunContainerExec(containerName string, commands []string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	pidEnvBytes, err := os.ReadFile(fmt.Sprintf("/proc/%s/environ", pid))
+	if err != nil {
+		return fmt.Errorf("get %s env failed", err)
+	}
+	pidenvs := strings.Split(string(pidEnvBytes), "\u0000")
+	cmd.Env = append(os.Environ(), pidenvs...)
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("run exec failed: %v", err)
