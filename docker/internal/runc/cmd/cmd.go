@@ -4,6 +4,7 @@ import (
 	"docker/internal/runc/cgroups"
 	"docker/internal/runc/cgroups/subsystem"
 	"docker/internal/runc/container"
+	"docker/internal/runc/network"
 	"docker/internal/utils/id"
 	"fmt"
 	"os"
@@ -262,6 +263,42 @@ var ExecCommand = cli.Command{
 		commands = append(commands, context.Args().Tail()...)
 
 		return container.RunContainerExec(containerName, commands)
+	},
+}
+
+var NetworkCommand = cli.Command{
+	Name:  "network",
+	Usage: "container network commands",
+	Subcommands: []cli.Command{
+		{
+			Name:  "create",
+			Usage: "create container network",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "driver",
+					Usage: "network driver",
+				},
+				cli.StringFlag{
+					Name:  "subnet",
+					Usage: "container subnet",
+				},
+			},
+			Action: func(context *cli.Context) error {
+				if len(context.Args()) != 1 {
+					return fmt.Errorf("wrong args %v for network create", context.Args())
+				}
+
+				subnet := context.String("subnet")
+				driver := context.String("driver")
+				name := context.Args().Get(0)
+
+				if err := network.Init(); err != nil {
+					return err
+				}
+
+				return network.CreateNetwork(subnet, driver, name)
+			},
+		},
 	},
 }
 
