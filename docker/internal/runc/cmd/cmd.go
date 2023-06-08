@@ -299,6 +299,29 @@ var NetworkCommand = cli.Command{
 				return network.CreateNetwork(subnet, driver, name)
 			},
 		},
+		{
+			Name:  "delete",
+			Usage: "delete container network",
+			Action: func(context *cli.Context) error {
+				if len(context.Args()) != 1 {
+					return fmt.Errorf("only container network name is needed for remove")
+				}
+
+				name := context.Args().Get(0)
+				return network.DeleteNetwork(name)
+			},
+		},
+		{
+			Name:  "list",
+			Usage: "list container network",
+			Action: func(context *cli.Context) error {
+				if len(context.Args()) != 0 {
+					return fmt.Errorf("no args needed for container list")
+				}
+
+				return network.ListNetwork()
+			},
+		},
 	},
 }
 
