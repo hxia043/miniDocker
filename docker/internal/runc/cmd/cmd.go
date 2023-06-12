@@ -58,7 +58,7 @@ func exitContainer(tty bool, volume string) error {
 	return nil
 }
 
-func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string, envs []string) {
+func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string, envs []string, net, portMapping string) {
 	defer exitContainer(tty, volume)
 
 	if name == "" {
@@ -79,6 +79,16 @@ func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, nam
 	defer cgroupManager.Destroy()
 	cgroupManager.Set(res)
 	cgroupManager.Apply(parent.Process.Pid)
+
+	if net != "" {
+		if err := network.Init(); err != nil {
+			log.Error("Failed to init network: ", err)
+		}
+
+		if err := network.ConnectNetwork(c.Name, net, portMapping, c.Pid); err != nil {
+			log.Error("Failed to connect network: ", err)
+		}
+	}
 
 	sendInitCommand(commands, writePipe)
 	if tty {
@@ -124,6 +134,14 @@ var RunCommand = cli.Command{
 			Name:  "e",
 			Usage: "set env",
 		},
+		cli.StringFlag{
+			Name:  "net",
+			Usage: "container network",
+		},
+		cli.StringFlag{
+			Name:  "p",
+			Usage: "container port mapping",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) < 1 {
@@ -151,7 +169,10 @@ var RunCommand = cli.Command{
 
 		name := context.String("name")
 		envs := context.StringSlice("e")
-		Run(tty, cmds, rc, volume, name, envs)
+
+		net := context.String("net")
+		portMapping := context.String("p")
+		Run(tty, cmds, rc, volume, name, envs, net, portMapping)
 		return nil
 	},
 }

@@ -98,8 +98,8 @@ func (b *Bridge) initBridge(network *Network) error {
 	return nil
 }
 
-func (b *Bridge) Create(subnet, name string) (*Network, error) {
-	ip, ipRange, _ := net.ParseCIDR(subnet)
+func (b *Bridge) Create(cidr, name string) (*Network, error) {
+	ip, ipRange, _ := net.ParseCIDR(cidr)
 	ipRange.IP = ip
 
 	network := &Network{
@@ -113,4 +113,30 @@ func (b *Bridge) Create(subnet, name string) (*Network, error) {
 	}
 
 	return network, nil
+}
+
+func (b *Bridge) Connect(network *Network, endpoint *Endpoint) error {
+	br, err := netlink.LinkByName(network.Name)
+	if err != nil {
+		return err
+	}
+
+	la := netlink.NewLinkAttrs()
+	la.Name = endpoint.ID[:5]
+	la.MasterIndex = br.Attrs().Index
+
+	endpoint.Veth = netlink.Veth{
+		LinkAttrs: la,
+		PeerName:  "cif-" + endpoint.ID[:5],
+	}
+
+	if err := netlink.LinkAdd(&endpoint.Veth); err != nil {
+		return err
+	}
+
+	if err := netlink.LinkSetUp(&endpoint.Veth); err != nil {
+		return err
+	}
+
+	return nil
 }

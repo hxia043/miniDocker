@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/gosuri/uitable"
 	"github.com/vishvananda/netlink"
@@ -81,6 +83,54 @@ func CreateNetwork(subnet, driver, name string) error {
 	}
 
 	return network.dump(defaultNetworkPath)
+}
+
+func setPortMapping(endpoint *Endpoint, portMapping string) error {
+	pm := strings.Split(portMapping, ":")
+	fmt.Println(pm)
+
+	if len(pm) != 2 {
+		return fmt.Errorf("port mapping format error")
+	}
+
+	iptablesCmd := fmt.Sprintf("-t nat -A PREROUTING -p tcp -m tcp --dport %s -j DNAT --to-destination %s:%s", pm[0], endpoint.IP, pm[1])
+	fmt.Println(iptablesCmd)
+
+	cmd := exec.Command("iptables", strings.Split(iptablesCmd, " ")...)
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to set iptables: %v, %v", err, output)
+	}
+
+	return nil
+}
+
+func ConnectNetwork(containerName, networkName, portMapping, pid string) error {
+	networkPath := path.Join(defaultNetworkPath, networkName)
+	network := &Network{Name: networkName}
+	if err := network.load(networkPath); err != nil {
+		return err
+	}
+
+	ip, err := ipAllocator.Allocate(network.IpRange)
+	if err != nil {
+		return err
+	}
+
+	endpoint := &Endpoint{
+		ID: fmt.Sprintf("%s-%s", containerName, network.Name),
+		IP: ip,
+	}
+
+	if err := drivers[network.Driver].Connect(network, endpoint); err != nil {
+		return err
+	}
+
+	if err := setEndpointIpAddressAndRoute(network, endpoint, pid); err != nil {
+		return err
+	}
+
+	return setPortMapping(endpoint, portMapping)
 }
 
 func (network *Network) dump(dumpPath string) error {
