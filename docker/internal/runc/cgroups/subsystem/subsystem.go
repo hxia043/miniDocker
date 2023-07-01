@@ -17,3 +17,11 @@ var Subsystems = []subsystem{
 	&CpuSet{},
 	&Memory{},
 }
+
+func NewResourceConfig(memory, cpuset, cpushare string) *ResourceConfig {
+	return &ResourceConfig{
+		MemoryLimit: memory,
+		CpuSet:      cpuset,
+		CpuShare:    cpushare,
+	}
+}

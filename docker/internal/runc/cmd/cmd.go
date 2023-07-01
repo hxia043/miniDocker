@@ -18,6 +18,45 @@ import (
 	"github.com/urfave/cli"
 )
 
+type containerConfig struct {
+	name           string
+	volume         string
+	network        string
+	portmapping    string
+	tty            bool
+	commands       []string
+	envs           []string
+	resourceConfig *subsystem.ResourceConfig
+}
+
+func parseCmdsFrom(context *cli.Context) []string {
+	var cmds []string
+	for _, arg := range context.Args() {
+		cmds = append(cmds, arg)
+	}
+
+	return cmds
+}
+
+func ttyValid(context *cli.Context) bool {
+	tty := context.Bool("it")
+	detach := context.Bool("d")
+	return tty && detach
+}
+
+func parseContainerConfig(context *cli.Context) *containerConfig {
+	return &containerConfig{
+		name:           context.String("name"),
+		volume:         context.String("v"),
+		network:        context.String("net"),
+		portmapping:    context.String("p"),
+		tty:            context.Bool("it"),
+		commands:       parseCmdsFrom(context),
+		envs:           context.StringSlice("e"),
+		resourceConfig: subsystem.NewResourceConfig(context.String("m"), context.String("cpuset"), context.String("cpushare")),
+	}
+}
+
 func exitContainer(tty bool, volume string) error {
 	if !tty {
 		return nil
@@ -58,43 +97,45 @@ func exitContainer(tty bool, volume string) error {
 	return nil
 }
 
-func Run(tty bool, commands []string, res *subsystem.ResourceConfig, volume, name string, envs []string, net, portMapping string) {
-	defer exitContainer(tty, volume)
+func runContainer(cConfig *containerConfig) error {
+	defer exitContainer(cConfig.tty, cConfig.volume)
 
-	if name == "" {
-		name = id.GenerateContainerId()
+	if cConfig.name == "" {
+		cConfig.name = id.GenerateContainerId()
 	}
 
-	parent, writePipe := container.NewParentProcess(tty, volume, name, envs)
+	parent, writePipe := container.NewParentProcess(cConfig.tty, cConfig.volume, cConfig.name, cConfig.envs)
 	if err := parent.Start(); err != nil {
 		log.Error(err)
 	}
 
-	c := container.New(name, strconv.Itoa(parent.Process.Pid), strings.Join(commands, " "), container.RUNNING)
+	c := container.New(cConfig.name, strconv.Itoa(parent.Process.Pid), strings.Join(cConfig.commands, " "), container.RUNNING)
 	if err := c.RecordContainerInfo(); err != nil {
 		log.Error("record container info failed")
 	}
 
 	cgroupManager := cgroups.New("minidocker-cgroup")
 	defer cgroupManager.Destroy()
-	cgroupManager.Set(res)
+	cgroupManager.Set(cConfig.resourceConfig)
 	cgroupManager.Apply(parent.Process.Pid)
 
-	if net != "" {
+	if cConfig.network != "" {
 		if err := network.Init(); err != nil {
 			log.Error("Failed to init network: ", err)
 		}
 
-		if err := network.ConnectNetwork(c.Name, net, portMapping, c.Pid); err != nil {
+		if err := network.ConnectNetwork(c.Name, cConfig.network, cConfig.portmapping, c.Pid); err != nil {
 			log.Error("Failed to connect network: ", err)
 		}
 	}
 
-	sendInitCommand(commands, writePipe)
-	if tty {
+	sendInitCommand(cConfig.commands, writePipe)
+	if cConfig.tty {
 		parent.Wait()
 		c.UpdateContainerInfo(container.EXIT)
 	}
+
+	return nil
 }
 
 var RunCommand = cli.Command{
@@ -145,34 +186,17 @@ var RunCommand = cli.Command{
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) < 1 {
-			return fmt.Errorf("missing container command")
+			return fmt.Errorf("minidocker: failed to get container command [%v]", context.Args())
 		}
 
-		var cmds []string
-		for _, arg := range context.Args() {
-			cmds = append(cmds, arg)
+		if !ttyValid(context) {
+			return fmt.Errorf("minidocker: failed to enable tty")
 		}
 
-		rc := &subsystem.ResourceConfig{
-			MemoryLimit: context.String("m"),
-			CpuSet:      context.String("cpuset"),
-			CpuShare:    context.String("cpushare"),
+		if err := runContainer(parseContainerConfig(context)); err != nil {
+			return fmt.Errorf("minidocker: failed to run container")
 		}
 
-		volume := context.String("v")
-
-		tty := context.Bool("it")
-		detach := context.Bool("d")
-		if tty && detach {
-			return fmt.Errorf("it and d flag can not be provided both")
-		}
-
-		name := context.String("name")
-		envs := context.StringSlice("e")
-
-		net := context.String("net")
-		portMapping := context.String("p")
-		Run(tty, cmds, rc, volume, name, envs, net, portMapping)
 		return nil
 	},
 }

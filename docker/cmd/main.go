@@ -9,11 +9,14 @@ import (
 	"github.com/urfave/cli"
 )
 
-const usage = `minidocker is a simple container runtime implementation.`
+const (
+	name  = "minidocker"
+	usage = `minidocker is a simple container runtime implementation.`
+)
 
-func main() {
+func createApp() *cli.App {
 	app := cli.NewApp()
-	app.Name = "minidocker"
+	app.Name = name
 	app.Usage = usage
 
 	app.Commands = []cli.Command{
@@ -34,6 +37,11 @@ func main() {
 		return nil
 	}
 
+	return app
+}
+
+func main() {
+	app := createApp()
 	if err := app.Run(os.Args); err != nil {
 		log.Fatal(err)
 	}
