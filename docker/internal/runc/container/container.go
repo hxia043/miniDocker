@@ -63,17 +63,9 @@ func NewParentProcess(tty bool, volume, name string, envs []string) (*exec.Cmd, 
 	}
 
 	if tty {
-		// containerlog := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, logName)
-		// file, _ := os.OpenFile(containerlog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
-		// defer func() { file.Close() }()
-
 		cmd.Stdin = os.Stdin
 		cmd.Stderr = os.Stderr
 		cmd.Stdout = os.Stdout
-
-		// multiWriter := io.MultiWriter(os.Stdout, file)
-		// log.SetOutput(multiWriter)
-		// log.Info("test output")
 	} else {
 		containerlog := fmt.Sprintf("%s/%s/%s", defaultContainerInfoPath, name, logName)
 		file, _ := os.OpenFile(containerlog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)

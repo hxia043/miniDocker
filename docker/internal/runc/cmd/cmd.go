@@ -8,6 +8,7 @@ import (
 	"docker/internal/utils/id"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +28,8 @@ type containerConfig struct {
 	commands       []string
 	envs           []string
 	resourceConfig *subsystem.ResourceConfig
+	parent         *exec.Cmd
+	writePipe      *os.File
 }
 
 func parseCmdsFrom(context *cli.Context) []string {
@@ -38,10 +41,14 @@ func parseCmdsFrom(context *cli.Context) []string {
 	return cmds
 }
 
-func ttyValid(context *cli.Context) bool {
+func ttyEnable(context *cli.Context) bool {
 	tty := context.Bool("it")
 	detach := context.Bool("d")
-	return tty && detach
+	if tty && detach {
+		return true
+	}
+
+	return false
 }
 
 func parseContainerConfig(context *cli.Context) *containerConfig {
@@ -57,12 +64,12 @@ func parseContainerConfig(context *cli.Context) *containerConfig {
 	}
 }
 
-func exitContainer(tty bool, volume string) error {
-	if !tty {
+func (config *containerConfig) exitContainer() error {
+	if !config.tty {
 		return nil
 	}
 
-	dirs := strings.Split(volume, ":")
+	dirs := strings.Split(config.volume, ":")
 	if len(dirs) == 2 {
 		volumeContainerDir := dirs[1]
 		volumeContainerMountPoint := container.Mergedir + volumeContainerDir
@@ -97,43 +104,81 @@ func exitContainer(tty bool, volume string) error {
 	return nil
 }
 
-func runContainer(cConfig *containerConfig) error {
-	defer exitContainer(cConfig.tty, cConfig.volume)
-
-	if cConfig.name == "" {
-		cConfig.name = id.GenerateContainerId()
+func (config *containerConfig) setContainerName() {
+	if config.name == "" {
+		config.name = id.GenerateContainerId()
 	}
+}
 
-	parent, writePipe := container.NewParentProcess(cConfig.tty, cConfig.volume, cConfig.name, cConfig.envs)
+func (config *containerConfig) startupParentProcess() error {
+	parent, writePipe := container.NewParentProcess(config.tty, config.volume, config.name, config.envs)
 	if err := parent.Start(); err != nil {
-		log.Error(err)
+		return err
 	}
 
-	c := container.New(cConfig.name, strconv.Itoa(parent.Process.Pid), strings.Join(cConfig.commands, " "), container.RUNNING)
+	config.parent, config.writePipe = parent, writePipe
+	return nil
+}
+
+func (config *containerConfig) recordContainerInfo() (*container.Container, error) {
+	c := container.New(config.name, strconv.Itoa(config.parent.Process.Pid), strings.Join(config.commands, " "), container.RUNNING)
 	if err := c.RecordContainerInfo(); err != nil {
-		log.Error("record container info failed")
+		return nil, err
 	}
 
+	return c, nil
+}
+
+func (config *containerConfig) setContainerCgroup() {
 	cgroupManager := cgroups.New("minidocker-cgroup")
 	defer cgroupManager.Destroy()
-	cgroupManager.Set(cConfig.resourceConfig)
-	cgroupManager.Apply(parent.Process.Pid)
+	cgroupManager.Set(config.resourceConfig)
+	cgroupManager.Apply(config.parent.Process.Pid)
+}
 
-	if cConfig.network != "" {
+func (config *containerConfig) setContainerNetwork() error {
+	if config.network != "" {
 		if err := network.Init(); err != nil {
-			log.Error("Failed to init network: ", err)
+			return err
 		}
 
-		if err := network.ConnectNetwork(c.Name, cConfig.network, cConfig.portmapping, c.Pid); err != nil {
-			log.Error("Failed to connect network: ", err)
+		if err := network.ConnectNetwork(config.name, config.network, config.portmapping, strconv.Itoa(config.parent.Process.Pid)); err != nil {
+			return err
 		}
 	}
 
-	sendInitCommand(cConfig.commands, writePipe)
-	if cConfig.tty {
-		parent.Wait()
+	return nil
+}
+
+func (config *containerConfig) updateContainerInfo(c *container.Container) {
+	if config.tty {
+		config.parent.Wait()
 		c.UpdateContainerInfo(container.EXIT)
 	}
+}
+
+func (config *containerConfig) runContainer() error {
+	defer config.exitContainer()
+
+	config.setContainerName()
+
+	if err := config.startupParentProcess(); err != nil {
+		return err
+	}
+
+	c, err := config.recordContainerInfo()
+	if err != nil {
+		return err
+	}
+
+	config.setContainerCgroup()
+
+	if err := config.setContainerNetwork(); err != nil {
+		return err
+	}
+
+	config.sendInitCommand()
+	config.updateContainerInfo(c)
 
 	return nil
 }
@@ -189,11 +234,11 @@ var RunCommand = cli.Command{
 			return fmt.Errorf("minidocker: failed to get container command [%v]", context.Args())
 		}
 
-		if !ttyValid(context) {
+		if ttyEnable(context) {
 			return fmt.Errorf("minidocker: failed to enable tty")
 		}
 
-		if err := runContainer(parseContainerConfig(context)); err != nil {
+		if err := parseContainerConfig(context).runContainer(); err != nil {
 			return fmt.Errorf("minidocker: failed to run container")
 		}
 
@@ -379,10 +424,10 @@ var InitCommand = cli.Command{
 	},
 }
 
-func sendInitCommand(commands []string, writePipe *os.File) {
-	command := strings.Join(commands, " ")
+func (config *containerConfig) sendInitCommand() {
+	command := strings.Join(config.commands, " ")
 	log.Info("send command: ", command)
 
-	writePipe.WriteString(command)
-	writePipe.Close()
+	config.writePipe.WriteString(command)
+	config.writePipe.Close()
 }
