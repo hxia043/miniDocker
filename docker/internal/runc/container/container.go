@@ -50,13 +50,7 @@ type Container struct {
 	config      string
 }
 
-func NewParentProcess(tty bool, volume, name string, envs []string) (*exec.Cmd, *os.File) {
-	readPipe, writePipe, err := pipe.NewPipe()
-	if err != nil {
-		log.Errorf("new pipe failed: %v", err)
-		return nil, nil
-	}
-
+func createInitCommand(name string, tty bool, readPipe *os.File, envs []string) *exec.Cmd {
 	cmd := exec.Command("/proc/self/exe", "init")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET | syscall.CLONE_NEWIPC,
@@ -77,16 +71,29 @@ func NewParentProcess(tty bool, volume, name string, envs []string) (*exec.Cmd, 
 	}
 
 	cmd.ExtraFiles = []*os.File{readPipe}
-
 	cmd.Env = append(os.Environ(), envs...)
+	cmd.Dir = Mergedir
+
+	return cmd
+}
+
+func createOverlayFilesystem(volume string) {
 	if volume != "" && len(strings.Split(volume, ":")) == 2 {
 		image.NewOverlayFilesystemWithVolume(imagedir, lowerdir, Upperdir, Workdir, Mergedir, volume)
 	} else {
 		image.NewOverlayFilesystem(imagedir, lowerdir, Upperdir, Workdir, Mergedir)
 	}
+}
 
-	cmd.Dir = Mergedir
-	return cmd, writePipe
+func NewParentProcess(tty bool, volume, name string, envs []string) (*exec.Cmd, *os.File, error) {
+	readPipe, writePipe, err := pipe.NewPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	createOverlayFilesystem(volume)
+
+	return createInitCommand(name, tty, readPipe, envs), writePipe, nil
 }
 
 func pivotRoot(root string) error {
@@ -96,7 +103,7 @@ func pivotRoot(root string) error {
 
 	// Mount the new root as a new filesystem
 	if err := syscall.Mount(root, root, "", syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
-		return fmt.Errorf("mount rootfs to itself failed: %v", err)
+		return fmt.Errorf("minidocker: mount rootfs to itself failed [%v]", err)
 	}
 
 	// Create a new directory for the old root
@@ -107,48 +114,48 @@ func pivotRoot(root string) error {
 
 	// Pivot the root directory
 	if err := syscall.PivotRoot(root, pivotDir); err != nil {
-		return fmt.Errorf("pivot_root %v", err)
+		return fmt.Errorf("minidocker: pivot root directory failed [%v]", err)
 	}
 
 	// Change the current working directory to "/"
 	if err := syscall.Chdir("/"); err != nil {
-		return fmt.Errorf("chdir %v", err)
+		return fmt.Errorf("minidocker: chdir the current directory failed [%v]", err)
 	}
 
 	// Unmount the old root
 	pivotDir = filepath.Join("/", ".pivot_root")
 	if err := syscall.Unmount(pivotDir, syscall.MNT_DETACH); err != nil {
-		return fmt.Errorf("umount pivot_root dir %v", err)
+		return fmt.Errorf("minidocker: umount pivot_root directory fialed [%v]", err)
 	}
 
 	return os.Remove(pivotDir)
 }
 
-func setupMount() {
+func setupMount() error {
 	pwd, err := os.Getwd()
 	if err != nil {
-		log.Errorf("get current location failed: %v", err)
+		return fmt.Errorf("minidocker: get current location failed [%v]", err)
 	}
 
 	log.Infof("current locaion: %v", pwd)
 	if err := pivotRoot(pwd); err != nil {
-		log.Errorf("change root filesystem failed: %v", err)
+		return fmt.Errorf("minidocker: change root filesystem failed [%v]", err)
 	}
 
 	defaultMountFlags := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
 	syscall.Mount("proc", "/proc", "proc", uintptr(defaultMountFlags), "")
 	syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_STRICTATIME, "mode=755")
+
+	return nil
 }
 
-func readUserCommands() []string {
-	pipe := os.NewFile(uintptr(3), "pipe")
-	msg, err := io.ReadAll(pipe)
+func readUserCommands() ([]string, error) {
+	msg, err := io.ReadAll(os.NewFile(uintptr(3), "pipe"))
 	if err != nil {
-		log.Errorf("read pipe error %v", err)
-		return nil
+		return nil, fmt.Errorf("minidocker: read pipe error %v", err)
 	}
 
-	return strings.Split(string(msg), " ")
+	return strings.Split(string(msg), " "), nil
 }
 
 func RunContainerLog(name string) error {
@@ -322,23 +329,21 @@ func RunContainerExec(containerName string, commands []string) error {
 }
 
 func RunContainerInitProcess() error {
-	commands := readUserCommands()
-	if len(commands) == 0 {
-		return fmt.Errorf("get empty command")
+	commands, err := readUserCommands()
+	if err != nil {
+		return err
 	}
 
-	setupMount()
+	if err := setupMount(); err != nil {
+		return err
+	}
 
 	command, err := exec.LookPath(commands[0])
 	if err != nil {
-		return fmt.Errorf("look command %v failed: %v", command, err)
+		return fmt.Errorf("minidocker: look command [%v] failed [%v]", command, err)
 	}
 
-	if err := syscall.Exec(command, commands[0:], os.Environ()); err != nil {
-		log.Errorf(err.Error())
-	}
-
-	return nil
+	return syscall.Exec(command, commands[0:], os.Environ())
 }
 
 func (c *Container) UpdateContainerInfo(status string) {
@@ -360,32 +365,27 @@ func (c *Container) UpdateContainerInfo(status string) {
 func (c *Container) RecordContainerInfo() error {
 	containerInfo, err := json.MarshalIndent(c, "", "    ")
 	if err != nil {
-		log.Errorf("record container info failed: %v", err)
-		return err
+		return fmt.Errorf("minidocker: record container info failed [%v]", err)
 	}
 
 	containerInfoPath := fmt.Sprintf("%s/%s", defaultContainerInfoPath, c.Name)
 	if err := os.MkdirAll(containerInfoPath, 0622); err != nil {
-		log.Errorf("create container path failed: %v", err)
-		return err
+		return fmt.Errorf("minidocker: create container path failed [%v]", err)
 	}
 
 	c.config = fmt.Sprintf("%s/%s", containerInfoPath, configName)
 	file, err := os.Create(c.config)
+	if err != nil {
+		return fmt.Errorf("minidocker: create container path failed [%v]", err)
+	}
 	defer func() {
 		if err := file.Close(); err != nil {
 			return
 		}
 	}()
 
-	if err != nil {
-		log.Errorf("create container path failed: %v", err)
-		return err
-	}
-
 	if _, err := file.WriteString(string(containerInfo)); err != nil {
-		log.Errorf("write container config failed: %v", err)
-		return err
+		return fmt.Errorf("minidocker: write container config failed [%v]", err)
 	}
 
 	return nil

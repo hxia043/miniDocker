@@ -75,7 +75,11 @@ func (config *containerConfig) setContainerName() {
 }
 
 func (config *containerConfig) startupParentProcess() error {
-	parent, writePipe := container.NewParentProcess(config.tty, config.volume, config.name, config.envs)
+	parent, writePipe, err := container.NewParentProcess(config.tty, config.volume, config.name, config.envs)
+	if err != nil {
+		return err
+	}
+
 	if err := parent.Start(); err != nil {
 		return err
 	}
@@ -96,22 +100,21 @@ func (config *containerConfig) recordContainerInfo() (*container.Container, erro
 func (config *containerConfig) setContainerCgroup() {
 	cgroupManager := cgroups.New("minidocker-cgroup")
 	defer cgroupManager.Destroy()
+
 	cgroupManager.Set(config.resourceConfig)
 	cgroupManager.Apply(config.parent.Process.Pid)
 }
 
 func (config *containerConfig) setContainerNetwork() error {
-	if config.network != "" {
-		if err := network.Init(); err != nil {
-			return err
-		}
-
-		if err := network.ConnectNetwork(config.name, config.network, config.portmapping, strconv.Itoa(config.parent.Process.Pid)); err != nil {
-			return err
-		}
+	if config.network == "" {
+		return nil
 	}
 
-	return nil
+	if err := network.Init(); err != nil {
+		return err
+	}
+
+	return network.ConnectNetwork(config.name, config.network, config.portmapping, strconv.Itoa(config.parent.Process.Pid))
 }
 
 func (config *containerConfig) updateContainerInfo(c *container.Container) {
