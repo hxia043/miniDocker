@@ -1,36 +1,19 @@
 package cmd
 
 import (
-	"docker/internal/runc/cgroups"
 	"docker/internal/runc/cgroups/subsystem"
 	"docker/internal/runc/container"
 	"docker/internal/runc/network"
-	"docker/internal/utils/id"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
-	"syscall"
 
 	_ "docker/internal/runc/nsenter"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/urfave/cli"
 )
-
-type containerConfig struct {
-	name           string
-	volume         string
-	network        string
-	portmapping    string
-	tty            bool
-	commands       []string
-	envs           []string
-	resourceConfig *subsystem.ResourceConfig
-	parent         *exec.Cmd
-	writePipe      *os.File
-}
 
 func parseCmdsFrom(context *cli.Context) []string {
 	var cmds []string
@@ -62,125 +45,6 @@ func parseContainerConfig(context *cli.Context) *containerConfig {
 		envs:           context.StringSlice("e"),
 		resourceConfig: subsystem.NewResourceConfig(context.String("m"), context.String("cpuset"), context.String("cpushare")),
 	}
-}
-
-func (config *containerConfig) exitContainer() error {
-	if !config.tty {
-		return nil
-	}
-
-	dirs := strings.Split(config.volume, ":")
-	if len(dirs) == 2 {
-		volumeContainerDir := dirs[1]
-		volumeContainerMountPoint := container.Mergedir + volumeContainerDir
-		if err := syscall.Unmount(volumeContainerMountPoint, 0); err != nil {
-			log.Error(err)
-			return err
-		}
-	}
-
-	if err := syscall.Unmount(container.Mergedir, 0); err != nil {
-		log.Error(err)
-		return err
-	}
-
-	if err := os.RemoveAll(container.Mergedir); err != nil {
-		log.Errorf("remove merge layer dir %v failed: %v", container.Mergedir, err)
-	}
-
-	if err := os.RemoveAll(container.Workdir); err != nil {
-		log.Errorf("remove work layer dir %v failed: %v", container.Upperdir, err)
-	}
-
-	if err := os.RemoveAll(container.Upperdir); err != nil {
-		log.Errorf("remove upper layer dir %v failed: %v", container.Upperdir, err)
-	}
-
-	if err := syscall.Unmount("/proc", 0); err != nil {
-		log.Error(err)
-		return err
-	}
-
-	return nil
-}
-
-func (config *containerConfig) setContainerName() {
-	if config.name == "" {
-		config.name = id.GenerateContainerId()
-	}
-}
-
-func (config *containerConfig) startupParentProcess() error {
-	parent, writePipe := container.NewParentProcess(config.tty, config.volume, config.name, config.envs)
-	if err := parent.Start(); err != nil {
-		return err
-	}
-
-	config.parent, config.writePipe = parent, writePipe
-	return nil
-}
-
-func (config *containerConfig) recordContainerInfo() (*container.Container, error) {
-	c := container.New(config.name, strconv.Itoa(config.parent.Process.Pid), strings.Join(config.commands, " "), container.RUNNING)
-	if err := c.RecordContainerInfo(); err != nil {
-		return nil, err
-	}
-
-	return c, nil
-}
-
-func (config *containerConfig) setContainerCgroup() {
-	cgroupManager := cgroups.New("minidocker-cgroup")
-	defer cgroupManager.Destroy()
-	cgroupManager.Set(config.resourceConfig)
-	cgroupManager.Apply(config.parent.Process.Pid)
-}
-
-func (config *containerConfig) setContainerNetwork() error {
-	if config.network != "" {
-		if err := network.Init(); err != nil {
-			return err
-		}
-
-		if err := network.ConnectNetwork(config.name, config.network, config.portmapping, strconv.Itoa(config.parent.Process.Pid)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (config *containerConfig) updateContainerInfo(c *container.Container) {
-	if config.tty {
-		config.parent.Wait()
-		c.UpdateContainerInfo(container.EXIT)
-	}
-}
-
-func (config *containerConfig) runContainer() error {
-	defer config.exitContainer()
-
-	config.setContainerName()
-
-	if err := config.startupParentProcess(); err != nil {
-		return err
-	}
-
-	c, err := config.recordContainerInfo()
-	if err != nil {
-		return err
-	}
-
-	config.setContainerCgroup()
-
-	if err := config.setContainerNetwork(); err != nil {
-		return err
-	}
-
-	config.sendInitCommand()
-	config.updateContainerInfo(c)
-
-	return nil
 }
 
 var RunCommand = cli.Command{
@@ -251,10 +115,10 @@ var CommitCommand = cli.Command{
 	Usage: "commit container to image with tar",
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) != 1 {
-			log.Errorf("wrong args for commit")
+			return errors.New("minidocker: wrong args for commit")
 		}
 
-		log.Infof("commit container into tar image")
+		log.Infof("minidocker: commit container into tar image")
 		imageName := context.Args().Get(0)
 		return container.RunContainerCommit(imageName)
 	},
@@ -271,12 +135,11 @@ var StopCommand = cli.Command{
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) != 0 {
-			log.Errorf("wrong args for stop container")
+			return errors.New("minidocker: wrong args for stop container")
 		}
 
-		log.Infof("stop container")
-		name := context.String("name")
-		return container.RunContainerStop(name)
+		log.Infof("minidocker: stop container")
+		return container.RunContainerStop(context.String("name"))
 	},
 }
 
@@ -291,12 +154,11 @@ var RemoveCommand = cli.Command{
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) != 0 {
-			log.Errorf("wrong args for remove container")
+			return errors.New("minidocker: wrong args for remove container")
 		}
 
-		log.Infof("remove container")
-		name := context.String("name")
-		return container.RunContainerRemove(name)
+		log.Infof("minidocker: remove container")
+		return container.RunContainerRemove(context.String("name"))
 	},
 }
 
@@ -310,9 +172,8 @@ var LogCommand = cli.Command{
 		},
 	},
 	Action: func(context *cli.Context) error {
-		log.Infof("collect container log")
-		name := context.String("name")
-		return container.RunContainerLog(name)
+		log.Infof("minidocker: collect container log")
+		return container.RunContainerLog(context.String("name"))
 	},
 }
 
@@ -327,10 +188,10 @@ var ListCommand = cli.Command{
 	},
 	Action: func(context *cli.Context) error {
 		if len(context.Args()) != 0 {
-			log.Errorf("wrong args for ps")
+			return errors.New("minidocker: wrong args for ps")
 		}
 
-		log.Infof("list container")
+		log.Infof("minidocker: list container")
 		return container.RunContainerList(context.Bool("a"))
 	},
 }
@@ -340,12 +201,12 @@ var ExecCommand = cli.Command{
 	Usage: "enter the contianer",
 	Action: func(context *cli.Context) error {
 		if pid := os.Getenv(container.ENV_EXEC_PID); pid != "" {
-			log.Info("callback to pid: ", pid)
+			log.Info("minidocker: callback to pid: ", pid)
 			return nil
 		}
 
 		if len(context.Args()) != 2 {
-			return fmt.Errorf("missing container name or command")
+			return fmt.Errorf("minidocker: missing container name or command")
 		}
 
 		containerName := context.Args().Get(0)
@@ -375,18 +236,15 @@ var NetworkCommand = cli.Command{
 			},
 			Action: func(context *cli.Context) error {
 				if len(context.Args()) != 1 {
-					return fmt.Errorf("wrong args %v for network create", context.Args())
+					return fmt.Errorf("minidocker: wrong args %v for network create", context.Args())
 				}
-
-				subnet := context.String("subnet")
-				driver := context.String("driver")
-				name := context.Args().Get(0)
 
 				if err := network.Init(); err != nil {
 					return err
 				}
 
-				return network.CreateNetwork(subnet, driver, name)
+				name := context.Args().Get(0)
+				return network.CreateNetwork(context.String("subnet"), context.String("driver"), name)
 			},
 		},
 		{
@@ -394,7 +252,7 @@ var NetworkCommand = cli.Command{
 			Usage: "delete container network",
 			Action: func(context *cli.Context) error {
 				if len(context.Args()) != 1 {
-					return fmt.Errorf("only container network name is needed for remove")
+					return fmt.Errorf("minidocker: only container network name is needed for remove")
 				}
 
 				name := context.Args().Get(0)
@@ -406,7 +264,7 @@ var NetworkCommand = cli.Command{
 			Usage: "list container network",
 			Action: func(context *cli.Context) error {
 				if len(context.Args()) != 0 {
-					return fmt.Errorf("no args needed for container list")
+					return fmt.Errorf("minidocker: no args needed for container list")
 				}
 
 				return network.ListNetwork()
@@ -419,14 +277,14 @@ var InitCommand = cli.Command{
 	Name:  "init",
 	Usage: `init container process`,
 	Action: func(context *cli.Context) error {
-		log.Infof("init container process")
+		log.Infof("minidocker: init container process")
 		return container.RunContainerInitProcess()
 	},
 }
 
 func (config *containerConfig) sendInitCommand() {
 	command := strings.Join(config.commands, " ")
-	log.Info("send command: ", command)
+	log.Info("minidocker: send command: ", command)
 
 	config.writePipe.WriteString(command)
 	config.writePipe.Close()
